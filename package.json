@@ -1,0 +1,26 @@
+{
+  "name": "claude-buddy",
+  "version": "0.1.0",
+  "description": "Permanent ASCII art coding companion for Claude Code — survives every update",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "npx tsx src/server.ts",
+    "show": "npx tsx src/show.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  },
+  "author": "Casta-mere",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Casta-mere/Claude-Buddy"
+  }
+}
