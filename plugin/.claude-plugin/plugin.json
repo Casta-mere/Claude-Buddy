@@ -1,0 +1,11 @@
+{
+  "name": "claude-buddy",
+  "version": "0.1.0",
+  "description": "Permanent ASCII art coding companion for Claude Code — an animated terminal pet that reacts to your coding, survives every update",
+  "author": {
+    "name": "Casta-mere"
+  },
+  "repository": "https://github.com/Casta-mere/Claude-Buddy",
+  "license": "MIT",
+  "keywords": ["companion", "buddy", "ascii-art", "terminal-pet"]
+}

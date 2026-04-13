@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "claude-buddy": {
+      "command": "bash",
+      "args": ["-c", "node \"$HOME/.claude-buddy/bin/buddy-server.mjs\""]
+    }
+  }
+}
