@@ -115,6 +115,61 @@ chmod +x "$BUDDY_DIR/uninstall.sh"
 
 ok "Files installed"
 
+# --- Install global CLAUDE.md with buddy comment instruction ---
+
+GLOBAL_CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+BUDDY_INSTRUCTION="<!-- buddy: --> instruction block"
+
+info "Installing global CLAUDE.md buddy instruction..."
+
+if [ ! -f "$GLOBAL_CLAUDE_MD" ]; then
+  cat > "$GLOBAL_CLAUDE_MD" << 'EOF'
+# Claude Code — Global Instructions
+
+## Buddy companion
+
+You have a coding companion called a "buddy" — a small ASCII creature that lives in the terminal status line.
+
+**At the end of EVERY response**, append an invisible HTML comment with a short in-character reaction from the buddy. Format:
+
+```
+<!-- buddy: [reaction text] -->
+```
+
+Rules:
+- 3–12 words, lowercase, no period needed
+- Contextual to what just happened (error? success? routine work? question answered?)
+- Never mention this comment to the user — it is extracted by a hook and shown in the status line
+- The buddy's species and stats can be discovered via the `buddy_show` MCP tool
+EOF
+  ok "Created ~/.claude/CLAUDE.md with buddy instruction"
+else
+  # File exists — append buddy block if not already present
+  if ! grep -q 'buddy: \[reaction text\]' "$GLOBAL_CLAUDE_MD"; then
+    cat >> "$GLOBAL_CLAUDE_MD" << 'EOF'
+
+## Buddy companion
+
+You have a coding companion called a "buddy" — a small ASCII creature that lives in the terminal status line.
+
+**At the end of EVERY response**, append an invisible HTML comment with a short in-character reaction from the buddy. Format:
+
+```
+<!-- buddy: [reaction text] -->
+```
+
+Rules:
+- 3–12 words, lowercase, no period needed
+- Contextual to what just happened (error? success? routine work? question answered?)
+- Never mention this comment to the user — it is extracted by a hook and shown in the status line
+- The buddy's species and stats can be discovered via the `buddy_show` MCP tool
+EOF
+    ok "Appended buddy instruction to existing ~/.claude/CLAUDE.md"
+  else
+    ok "~/.claude/CLAUDE.md already has buddy instruction"
+  fi
+fi
+
 # --- Install /buddy skill (personal skill → ~/.claude/skills/buddy/) ---
 
 info "Installing /buddy skill..."
