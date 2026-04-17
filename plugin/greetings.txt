@@ -1,0 +1,21 @@
+# Claude Buddy opening sayings — edit freely, one per line
+# Lines starting with # are ignored
+# Add your own lines and they'll appear in rotation
+
+ready when you are
+let's build something
+fully charged, awaiting input
+here we go again
+what are we making today
+reporting for duty
+fresh session, fresh ideas
+coffee ready, bugs beware
+debug mode: activated
+standing by
+at your service
+let's ship something
+all systems go
+ready to rumble
+loading developer wisdom...
+back at it
+new session, new possibilities
