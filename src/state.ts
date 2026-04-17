@@ -6,6 +6,13 @@ import type { Companion, BuddyBones } from "./engine.js";
 const STATE_DIR = join(homedir(), ".claude-buddy");
 const COMPANION_FILE = join(STATE_DIR, "companion.json");
 const STATUS_FILE = join(STATE_DIR, "status.json");
+const SESSIONS_DIR = join(STATE_DIR, "sessions");
+
+export interface SessionReaction {
+  session_id: string;
+  reaction: string;
+  reactionAt: number;
+}
 
 export interface StatusState {
   name: string;
@@ -81,6 +88,23 @@ export function updateReaction(reaction: string): void {
     status.reactionAt = Date.now();
     saveStatus(status);
   }
+}
+
+function ensureSessionsDir(): void {
+  if (!existsSync(SESSIONS_DIR)) {
+    mkdirSync(SESSIONS_DIR, { recursive: true });
+  }
+}
+
+export function saveSessionReaction(sessionId: string, reaction: string): void {
+  ensureSessionsDir();
+  const data: SessionReaction = { session_id: sessionId, reaction, reactionAt: Date.now() };
+  atomicWrite(join(SESSIONS_DIR, `${sessionId}.json`), JSON.stringify(data, null, 2));
+}
+
+export function updateReactionWithSession(reaction: string, sessionId?: string): void {
+  updateReaction(reaction);
+  if (sessionId) saveSessionReaction(sessionId, reaction);
 }
 
 export function syncStatusFromCompanion(companion: Companion, reaction?: string): void {

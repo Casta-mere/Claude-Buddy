@@ -21,8 +21,14 @@ import {
   syncStatusFromCompanion,
   setMuted,
   loadStatus,
-  updateReaction,
+  updateReactionWithSession,
+  saveSessionReaction,
 } from "./state.js";
+
+const SESSION_ID: string | undefined =
+  process.env.CLAUDE_SESSION_ID ||
+  process.env.CLAUDE_CODE_SESSION_ID ||
+  undefined;
 
 function ensureCompanion(): Companion {
   let companion = loadCompanion();
@@ -83,6 +89,7 @@ server.tool("buddy_pet", "Pet your coding companion", {}, async () => {
 
   const reaction = getReaction("pet", companion.bones.species, companion.bones.peak);
   syncStatusFromCompanion(companion, reaction);
+  if (SESSION_ID) saveSessionReaction(SESSION_ID, reaction);
 
   return {
     content: [
@@ -144,6 +151,7 @@ server.tool("buddy_unmute", "Unmute buddy reactions in the status line", {}, asy
   const companion = ensureCompanion();
   const reaction = getReaction("hatch", companion.bones.species, companion.bones.peak);
   syncStatusFromCompanion(companion, reaction);
+  if (SESSION_ID) saveSessionReaction(SESSION_ID, reaction);
   return {
     content: [{ type: "text", text: `${companion.name} is back! "${reaction}"` }],
   };
@@ -160,7 +168,7 @@ server.tool(
       return { content: [{ type: "text", text: "(muted)" }] };
     }
     const reaction = getReaction(event, companion.bones.species, companion.bones.peak);
-    updateReaction(reaction);
+    updateReactionWithSession(reaction, SESSION_ID);
     return { content: [{ type: "text", text: reaction }] };
   }
 );
