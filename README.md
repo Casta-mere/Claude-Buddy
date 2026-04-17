@@ -11,6 +11,9 @@ An animated terminal pet that lives in your Claude Code status line, reacts to e
 - Animated status line with speech bubbles
 - Contextual reactions to errors, test failures, and successes
 - Deterministic identity — same account always gets the same buddy
+- Per-terminal isolation — each terminal window shows its own session's reaction
+- Random opening greeting on new sessions, customizable via `~/.claude-buddy/greetings.txt`
+- Resume-aware — `claude --resume` restores that session's last reaction immediately
 - Pet counter, stats, and personality
 - Built as a Claude Code plugin using MCP, skills, and hooks
 
@@ -91,8 +94,15 @@ Claude Buddy uses four Claude Code extension points:
 
 1. **MCP Server** — provides tools for showing, petting, and managing your buddy. Injects a system prompt so Claude appends invisible `<!-- buddy: ... -->` comments.
 2. **Skill** — routes `/claude-buddy:buddy` slash commands to MCP tools.
-3. **Hooks** — PostToolUse detects errors/successes in Bash output. Stop hook extracts buddy comments from responses.
-4. **Status Line** — animated bash script reads `~/.claude-buddy/status.json` and renders the buddy with a speech bubble.
+3. **Hooks** — three hooks wire the behavior together:
+   - **SessionStart** (`session-start.sh`): greets new sessions or restores the reaction from a resumed session
+   - **PostToolUse** (`react.sh`): detects errors/successes in Bash output
+   - **Stop** (`buddy-comment.sh`): extracts `<!-- buddy: ... -->` comments from Claude's responses
+4. **Status Line** — animated bash script that reads the current terminal's TTY-scoped session file (falling back to `~/.claude-buddy/status.json`) and renders the buddy with a speech bubble.
+
+## Customization
+
+Edit `~/.claude-buddy/greetings.txt` to change the opening sayings shown when a new session starts. One greeting per line; lines starting with `#` are ignored.
 
 ## Troubleshooting
 
