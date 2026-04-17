@@ -64,6 +64,18 @@ done
 [ "${COLS:-0}" -lt 40 ] && COLS=${COLUMNS:-0}
 [ "${COLS:-0}" -lt 40 ] && COLS=125
 
+# Override reaction with this terminal's session (TTY-scoped isolation)
+if [ -n "$TTY" ] && [ "$TTY" != "??" ] && [ "$TTY" != "-" ]; then
+  SID=$(cat "$HOME/.claude-buddy/tty-sessions/$TTY" 2>/dev/null)
+  if [ -n "$SID" ]; then
+    SESSION_FILE="$HOME/.claude-buddy/sessions/${SID}.json"
+    if [ -f "$SESSION_FILE" ]; then
+      SESSION_REACTION=$(jq -r '.reaction // ""' "$SESSION_FILE" 2>/dev/null)
+      [ -n "$SESSION_REACTION" ] && REACTION="$SESSION_REACTION"
+    fi
+  fi
+fi
+
 # ─── Species art: 3 frames, 4 lines each ─────────────────────────────────────
 case "$SPECIES" in
   duck)

@@ -95,6 +95,8 @@ info "Installing to $BUDDY_DIR..."
 mkdir -p "$BUDDY_DIR/bin"
 mkdir -p "$BUDDY_DIR/hooks"
 mkdir -p "$BUDDY_DIR/statusline"
+mkdir -p "$BUDDY_DIR/sessions"
+mkdir -p "$BUDDY_DIR/tty-sessions"
 
 # Copy bundled MCP server
 cp "$SOURCE_DIR/dist/buddy-server.mjs" "$BUDDY_DIR/bin/buddy-server.mjs"
@@ -102,8 +104,15 @@ cp "$SOURCE_DIR/dist/buddy-server.mjs" "$BUDDY_DIR/bin/buddy-server.mjs"
 # Copy hook scripts
 cp "$SOURCE_DIR/plugin/hooks/react.sh" "$BUDDY_DIR/hooks/react.sh"
 cp "$SOURCE_DIR/plugin/hooks/buddy-comment.sh" "$BUDDY_DIR/hooks/buddy-comment.sh"
+cp "$SOURCE_DIR/plugin/hooks/session-start.sh" "$BUDDY_DIR/hooks/session-start.sh"
 chmod +x "$BUDDY_DIR/hooks/react.sh"
 chmod +x "$BUDDY_DIR/hooks/buddy-comment.sh"
+chmod +x "$BUDDY_DIR/hooks/session-start.sh"
+
+# Install greetings file (preserve user's edits if already exists)
+if [ ! -f "$BUDDY_DIR/greetings.txt" ]; then
+  cp "$SOURCE_DIR/plugin/greetings.txt" "$BUDDY_DIR/greetings.txt"
+fi
 
 # Copy status line script
 cp "$SOURCE_DIR/statusline/buddy-status.sh" "$BUDDY_DIR/statusline/buddy-status.sh"
@@ -237,6 +246,15 @@ SETTINGS=$(echo "$SETTINGS" | jq --arg cmd "bash $BUDDY_DIR/hooks/buddy-comment.
   if .hooks.Stop == null then .hooks.Stop = [] else . end |
   if (.hooks.Stop | map(select(.hooks[]?.command == $cmd)) | length) > 0 then .
   else .hooks.Stop += [{"hooks": [{"type": "command", "command": $cmd, "timeout": 5}]}]
+  end
+')
+
+# Add SessionStart hook for session greeting and resume restore
+SETTINGS=$(echo "$SETTINGS" | jq --arg cmd "bash $BUDDY_DIR/hooks/session-start.sh" '
+  if .hooks == null then .hooks = {} else . end |
+  if .hooks.SessionStart == null then .hooks.SessionStart = [] else . end |
+  if (.hooks.SessionStart | map(select(.hooks[]?.command == $cmd)) | length) > 0 then .
+  else .hooks.SessionStart += [{"hooks": [{"type": "command", "command": $cmd, "timeout": 5}]}]
   end
 ')
 
