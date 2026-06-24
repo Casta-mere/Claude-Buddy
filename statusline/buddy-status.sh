@@ -2,6 +2,10 @@
 # claude-buddy status line — animated, right-aligned multi-line companion
 # Uses Braille Blank (U+2800) for padding — survives JS .trim()
 
+# UTF-8 locale so ${#str} counts display columns (block glyphs = 1 col), keeping
+# the right-alignment width math exact even with Unicode bars.
+export LC_ALL=en_US.UTF-8
+
 STATE="$HOME/.claude-buddy/status.json"
 COMPANION="$HOME/.claude-buddy/companion.json"
 
@@ -20,7 +24,24 @@ RARITY=$(jq -r '.rarity // "common"' "$STATE" 2>/dev/null)
 REACTION=$(jq -r '.reaction // ""' "$STATE" 2>/dev/null)
 E=$(jq -r '.bones.eye // "o"' "$COMPANION" 2>/dev/null)
 
-cat > /dev/null  # drain stdin
+INPUT=$(cat)  # Claude Code status JSON on stdin
+
+# ─── Status bar inputs (all optional; missing fields collapse cleanly) ────────
+SB_MODEL=$(printf '%s' "$INPUT"   | jq -r '.model.display_name // empty' 2>/dev/null)
+SB_EFFORT=$(printf '%s' "$INPUT"  | jq -r '.effort.level // empty' 2>/dev/null)
+SB_THINKON=$(printf '%s' "$INPUT" | jq -r '.thinking.enabled // false' 2>/dev/null)
+SB_FAST=$(printf '%s' "$INPUT"    | jq -r '.fast_mode // false' 2>/dev/null)
+SB_CWD=$(printf '%s' "$INPUT"     | jq -r '.workspace.current_dir // .cwd // empty' 2>/dev/null)
+SB_WINSIZE=$(printf '%s' "$INPUT" | jq -r '.context_window.context_window_size // empty' 2>/dev/null)
+SB_CTXPCT=$(printf '%s' "$INPUT"  | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
+SB_DURMS=$(printf '%s' "$INPUT"   | jq -r '.cost.total_duration_ms // empty' 2>/dev/null)
+SB_5HPCT=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.five_hour.used_percentage // empty' 2>/dev/null)
+SB_5HRST=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.five_hour.resets_at // empty' 2>/dev/null)
+SB_7DPCT=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.seven_day.used_percentage // empty' 2>/dev/null)
+SB_7DRST=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.seven_day.resets_at // empty' 2>/dev/null)
+SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null)
+SB_BRANCH=""
+[ -n "$SB_CWD" ] && SB_BRANCH=$(git -C "$SB_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
 # ─── Animation ───────────────────────────────────────────────────────────────
 SEQ=(0 0 0 0 1 0 0 0 -1 0 0 2 0 0 0)
@@ -288,9 +309,6 @@ MARGIN=8
 PAD=$(( COLS - TOTAL_W - MARGIN ))
 [ "$PAD" -lt 0 ] && PAD=0
 
-# Braille Blank + spaces: B at start prevents JS .trim() from stripping padding
-SPACER=$(printf "${B}%${PAD}s" "")
-
 # Vertically center bubble on art
 BUBBLE_START=0
 if [ $BUBBLE_COUNT -gt 0 ] && [ $BUBBLE_COUNT -lt $ART_COUNT ]; then
@@ -305,9 +323,128 @@ if [ $BUBBLE_COUNT -gt 2 ]; then
     CONNECTOR_BI=$(( (FIRST_TEXT + LAST_TEXT) / 2 ))
 fi
 
+# ─── Left status bar (2 lines) ────────────────────────────────────────────────
+# Palette (truecolor). Block glyphs are 1 display column each; LC_ALL keeps ${#} honest.
+CLR_MODEL=$'\033[1;38;2;130;170;255m'   # model name (bold blue)
+CLR_THINK=$'\033[38;2;199;146;234m'     # thinking level (mauve)
+CLR_FAST=$'\033[38;2;255;176;102m'      # fast mode (amber)
+CLR_DIR=$'\033[38;2;94;200;230m'        # working dir (cyan)
+CLR_BRANCH=$'\033[38;2;120;200;120m'    # git branch (green)
+CLR_TIMER=$'\033[38;2;150;160;180m'     # session timer (slate)
+CLR_GREEN=$'\033[38;2;120;200;120m'     # usage < 50%
+CLR_YEL=$'\033[38;2;235;200;90m'        # usage 50-79%
+CLR_RED=$'\033[38;2;235;110;110m'       # usage >= 80%
+CLR_TRACK=$'\033[38;2;78;82;94m'        # empty bar track
+
+sb_thr() {  # $1=pct -> echo threshold color
+    if   [ "${1:-0}" -lt 50 ] 2>/dev/null; then printf '%s' "$CLR_GREEN"
+    elif [ "${1:-0}" -lt 80 ] 2>/dev/null; then printf '%s' "$CLR_YEL"
+    else printf '%s' "$CLR_RED"; fi
+}
+_BP=""; _BC=""  # last bar built: plain glyphs / colored glyphs
+sb_bar() {  # $1=pct $2=width -> sets _BP and _BC (filled=threshold color, empty=track)
+    local pct=$1 w=$2 fill i col switched=0
+    [ "${pct:-0}" -gt 100 ] 2>/dev/null && pct=100
+    [ "${pct:-0}" -lt 0 ] 2>/dev/null && pct=0
+    fill=$(( (pct * w + 50) / 100 ))
+    col=$(sb_thr "$pct")
+    _BP=""; _BC="$col"
+    for (( i=0; i<w; i++ )); do
+        if [ $i -lt $fill ]; then _BP+="█"; _BC+="█"
+        else
+            [ $switched -eq 0 ] && { _BC+="${NC}${CLR_TRACK}"; switched=1; }
+            _BP+="░"; _BC+="░"
+        fi
+    done
+    _BC+="${NC}"
+}
+sb_dur() {  # $1=seconds -> "Xd Yh" / "Xh Ym" / "Zm"
+    local s=$1 d h m
+    [ "${s:-0}" -lt 0 ] 2>/dev/null && s=0
+    d=$(( s/86400 )); h=$(( (s%86400)/3600 )); m=$(( (s%3600)/60 ))
+    if [ $d -gt 0 ]; then printf '%dd %dh' "$d" "$h"
+    elif [ $h -gt 0 ]; then printf '%dh %dm' "$h" "$m"
+    else printf '%dm' "$m"; fi
+}
+sb_cap() {  # capitalize first letter
+    printf '%s%s' "$(printf '%s' "${1:0:1}" | tr '[:lower:]' '[:upper:]')" "${1:1}"
+}
+CURP=""; CURD=""  # segment accumulators (plain / display); no namerefs (macOS bash 3.2)
+sb_seg() {  # $1=plain $2=colored — appends with dim " | " separator, skips empties
+    [ -z "$1" ] && return
+    if [ -n "$CURP" ]; then CURP+=" | "; CURD+="${DIM} | ${NC}"; fi
+    CURP+="$1"; CURD+="$2"
+}
+
+# Line 1: [model (window) | effort] | dir git:(branch) | email | timer
+WINLBL=""
+if [ -n "$SB_WINSIZE" ]; then
+    if [ "$SB_WINSIZE" -ge 1000000 ] 2>/dev/null; then WINLBL=" (1M context)"
+    elif [ "$SB_WINSIZE" -ge 1000 ] 2>/dev/null; then WINLBL=" ($(( SB_WINSIZE/1000 ))K context)"; fi
+fi
+CURP=""; CURD=""
+if [ -n "$SB_MODEL" ]; then
+    effP=""; effC=""
+    if [ "$SB_THINKON" = "true" ] && [ -n "$SB_EFFORT" ]; then
+        e=$(sb_cap "$SB_EFFORT"); effP=" | $e"; effC="${DIM} | ${NC}${CLR_THINK}${e}${NC}"
+    fi
+    [ "$SB_FAST" = "true" ] && { effP="$effP | Fast"; effC="${effC}${DIM} | ${NC}${CLR_FAST}Fast${NC}"; }
+    sb_seg "[${SB_MODEL}${WINLBL}${effP}]" \
+           "${DIM}[${NC}${CLR_MODEL}${SB_MODEL}${NC}${DIM}${WINLBL}${NC}${effC}${DIM}]${NC}"
+fi
+if [ -n "$SB_CWD" ]; then
+    dn=$(basename "$SB_CWD")
+    if [ -n "$SB_BRANCH" ]; then
+        sb_seg "${dn} git:(${SB_BRANCH})" \
+               "${CLR_DIR}${dn}${NC} ${DIM}git:(${NC}${CLR_BRANCH}${SB_BRANCH}${NC}${DIM})${NC}"
+    else
+        sb_seg "${dn}" "${CLR_DIR}${dn}${NC}"
+    fi
+fi
+[ -n "$SB_EMAIL" ] && sb_seg "$SB_EMAIL" "${DIM}${SB_EMAIL}${NC}"
+if [ -n "$SB_DURMS" ]; then
+    t=$(sb_dur $(( SB_DURMS/1000 )))
+    sb_seg "$t" "${CLR_TIMER}${t}${NC}"
+fi
+BAR0_P="$CURP"; BAR0_D="$CURD"
+
+# Line 2: Context bar % | Usage(5h) bar % (resets) | weekly bar % (resets)
+CURP=""; CURD=""
+NOW2=$(date +%s)
+if [ -n "$SB_CTXPCT" ]; then
+    sb_bar "$SB_CTXPCT" 10; pc=$(sb_thr "$SB_CTXPCT")
+    sb_seg "Context ${_BP} ${SB_CTXPCT}%" \
+           "${DIM}Context ${NC}${_BC} ${pc}${SB_CTXPCT}%${NC}"
+fi
+if [ -n "$SB_5HPCT" ]; then
+    rst=""; [ -n "$SB_5HRST" ] && rst=" (resets in $(sb_dur $(( SB_5HRST - NOW2 ))))"
+    sb_bar "$SB_5HPCT" 10; pc=$(sb_thr "$SB_5HPCT")
+    sb_seg "Usage ${_BP} ${SB_5HPCT}%${rst}" \
+           "${DIM}Usage ${NC}${_BC} ${pc}${SB_5HPCT}%${NC}${DIM}${rst}${NC}"
+fi
+if [ -n "$SB_7DPCT" ]; then
+    rst=""; [ -n "$SB_7DRST" ] && rst=" (resets in $(sb_dur $(( SB_7DRST - NOW2 ))))"
+    sb_bar "$SB_7DPCT" 10; pc=$(sb_thr "$SB_7DPCT")
+    sb_seg "Week ${_BP} ${SB_7DPCT}%${rst}" \
+           "${DIM}Week ${NC}${_BC} ${pc}${SB_7DPCT}%${NC}${DIM}${rst}${NC}"
+fi
+BAR1_P="$CURP"; BAR1_D="$CURD"
+
 # ─── Output ───────────────────────────────────────────────────────────────────
 for (( i=0; i<ART_COUNT; i++ )); do
     art_part="${ALL_COLORS[$i]}${ALL_LINES[$i]}${NC}"
+
+    # Left region holds the status bar on the top two rows; blank elsewhere.
+    # B (Braille Blank) at line start prevents JS .trim() from stripping padding.
+    if [ $i -eq 0 ]; then lp="$BAR0_P"; ld="$BAR0_D"
+    elif [ $i -eq 1 ]; then lp="$BAR1_P"; ld="$BAR1_D"
+    else lp=""; ld=""; fi
+    lplen=${#lp}
+    if [ "$lplen" -le "$PAD" ]; then
+        leftfield="${ld}$(printf '%*s' "$(( PAD - lplen ))" '')"
+    else
+        leftfield="${lp:0:$PAD}"   # truncate (drops color) when terminal is narrow
+    fi
 
     if [ $BUBBLE_COUNT -gt 0 ]; then
         bi=$(( i - BUBBLE_START ))
@@ -322,19 +459,19 @@ for (( i=0; i<ART_COUNT; i++ )); do
             fi
 
             if [ "$btype" = "border" ]; then
-                echo "${SPACER}${C}${bline}${NC}${gap}${art_part}"
+                echo "${B}${leftfield}${C}${bline}${NC}${gap}${art_part}"
             else
                 pipe_l="${bline:0:1}"
                 pipe_r="${bline: -1}"
                 inner="${bline:1:$(( ${#bline} - 2 ))}"
-                echo "${SPACER}${C}${pipe_l}${NC}${DIM}${inner}${NC}${C}${pipe_r}${NC}${gap}${art_part}"
+                echo "${B}${leftfield}${C}${pipe_l}${NC}${DIM}${inner}${NC}${C}${pipe_r}${NC}${gap}${art_part}"
             fi
         else
             empty=$(printf '%*s' "$BOX_W" '')
-            echo "${SPACER}${empty}   ${art_part}"
+            echo "${B}${leftfield}${empty}   ${art_part}"
         fi
     else
-        echo "${SPACER}${art_part}"
+        echo "${B}${leftfield}${art_part}"
     fi
 done
 

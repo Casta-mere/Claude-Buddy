@@ -40,7 +40,7 @@ Four integration points, all from a single plugin:
    - `session-start.sh` (SessionStart) — greets new sessions from `greetings.txt`; re-binds TTY mapping on resume
    - `react.sh` (PostToolUse/Bash) — detects errors/successes in Bash output
    - `buddy-comment.sh` (Stop) — extracts `<!-- buddy: ... -->` comments from Claude's responses
-4. **Status Line** (`statusline/buddy-status.sh`) — animated display; reads TTY-scoped `~/.claude-buddy/tty-sessions/{tty}` → `sessions/{id}.json`, falling back to `status.json`.
+4. **Status Line** (`statusline/buddy-status.sh`) — animated display; reads TTY-scoped `~/.claude-buddy/tty-sessions/{tty}` → `sessions/{id}.json`, falling back to `status.json`. Also parses Claude Code's status JSON on stdin to render a left-aligned info bar (model + thinking level, dir + git branch, account email, context %, session/weekly rate-limit usage + reset times) on the top two rows; missing JSON fields collapse cleanly. Bar content is ASCII-only so `${#}` width math for right-aligning the buddy stays exact.
 
 ## Source Layout
 
