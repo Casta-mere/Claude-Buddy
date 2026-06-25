@@ -44,8 +44,20 @@ SB_CFGDIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SB_ACCT=$(basename "$SB_CFGDIR"); SB_ACCT="${SB_ACCT#.}"; [ -z "$SB_ACCT" ] && SB_ACCT="claude"
 SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$SB_CFGDIR/.claude.json" 2>/dev/null)
 [ -z "$SB_EMAIL" ] && SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null)
-SB_BRANCH=""
-[ -n "$SB_CWD" ] && SB_BRANCH=$(git -C "$SB_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null)
+SB_BRANCH=""; SB_DIRTY=""; SB_AHEAD=0; SB_BEHIND=0
+if [ -n "$SB_CWD" ]; then
+    SB_BRANCH=$(git -C "$SB_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [ -n "$SB_BRANCH" ]; then
+        # "*" when tracked files are modified/staged (untracked files don't count)
+        [ -n "$(git -C "$SB_CWD" status --porcelain --untracked-files=no 2>/dev/null)" ] && SB_DIRTY="*"
+        # ahead/behind upstream: rev-list --left-right --count prints "behind<TAB>ahead"
+        ab=$(git -C "$SB_CWD" rev-list --left-right --count '@{u}...HEAD' 2>/dev/null)
+        if [ -n "$ab" ]; then
+            SB_BEHIND=$(printf '%s' "$ab" | awk '{print $1+0}')
+            SB_AHEAD=$(printf '%s' "$ab" | awk '{print $2+0}')
+        fi
+    fi
+fi
 
 SB_NOW=$(date +%s)
 
@@ -430,8 +442,12 @@ fi
 if [ -n "$SB_CWD" ]; then
     dn=$(basename "$SB_CWD")
     if [ -n "$SB_BRANCH" ]; then
-        P="${dn}:${SB_BRANCH}"
-        D="${CLR_DIR}${dn}${NC}${DIM}:${NC}${CLR_BRANCH}${SB_BRANCH}${NC}"
+        P="${dn}:${SB_BRANCH}${SB_DIRTY}"
+        D="${CLR_DIR}${dn}${NC}${DIM}:${NC}${CLR_BRANCH}${SB_BRANCH}${NC}${CLR_YEL}${SB_DIRTY}${NC}"
+        ab=""; abc=""
+        [ "$SB_AHEAD" -gt 0 ] 2>/dev/null && { ab="+${SB_AHEAD}"; abc="${CLR_GREEN}+${SB_AHEAD}${NC}"; }
+        [ "$SB_BEHIND" -gt 0 ] 2>/dev/null && { ab="${ab:+$ab/}-${SB_BEHIND}"; abc="${abc:+$abc${DIM}/${NC}}${CLR_RED}-${SB_BEHIND}${NC}"; }
+        [ -n "$ab" ] && { P+=" ${ab}"; D+=" ${abc}"; }
     else
         P="$dn"; D="${CLR_DIR}${dn}${NC}"
     fi
