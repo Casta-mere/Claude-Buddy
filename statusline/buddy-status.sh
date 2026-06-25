@@ -47,17 +47,7 @@ SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$SB_CFGDIR/.claude.json"
 SB_BRANCH=""
 [ -n "$SB_CWD" ] && SB_BRANCH=$(git -C "$SB_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
-# Shared write-through usage cache: each account leaves its latest rate-limit
-# snapshot here so the bar can show every account, not just the active session's.
-SB_USAGE_DIR="$HOME/.claude-buddy/usage"
 SB_NOW=$(date +%s)
-if [ -n "$SB_5HPCT" ]; then
-    mkdir -p "$SB_USAGE_DIR" 2>/dev/null
-    SB_TMP="$SB_USAGE_DIR/.${SB_ACCT}.$$.tmp"
-    printf '{"label":"%s","email":"%s","five_hour":{"pct":%s,"resets_at":%s},"seven_day":{"pct":%s,"resets_at":%s},"ts":%s}\n' \
-        "$SB_ACCT" "$SB_EMAIL" "${SB_5HPCT:-0}" "${SB_5HRST:-0}" "${SB_7DPCT:-0}" "${SB_7DRST:-0}" "$SB_NOW" \
-        > "$SB_TMP" 2>/dev/null && mv -f "$SB_TMP" "$SB_USAGE_DIR/${SB_ACCT}.json" 2>/dev/null
-fi
 
 # ─── Animation ───────────────────────────────────────────────────────────────
 SEQ=(0 0 0 0 1 0 0 0 -1 0 0 2 0 0 0)
@@ -452,53 +442,32 @@ if [ -n "$SB_CWD" ]; then
     add_row "$P" "$D"
 fi
 
-# Gather cached accounts (active account's file was just refreshed above).
-ACC_LBL=(); ACC_5P=(); ACC_5R=(); ACC_7P=(); ACC_7R=(); ACC_TS=(); ACC_CLR=()
-MAXLBL=0; acc_i=0
-if [ -d "$SB_USAGE_DIR" ]; then
-    for f in "$SB_USAGE_DIR"/*.json; do
-        [ -e "$f" ] || continue
-        d=$(cat "$f" 2>/dev/null)
-        lbl=$(printf '%s' "$d" | jq -r '.label // empty' 2>/dev/null)
-        [ -z "$lbl" ] && continue
-        ACC_LBL+=("$lbl")
-        ACC_5P+=("$(printf '%s' "$d" | jq -r '.five_hour.pct // 0' 2>/dev/null)")
-        ACC_5R+=("$(printf '%s' "$d" | jq -r '.five_hour.resets_at // 0' 2>/dev/null)")
-        ACC_7P+=("$(printf '%s' "$d" | jq -r '.seven_day.pct // 0' 2>/dev/null)")
-        ACC_7R+=("$(printf '%s' "$d" | jq -r '.seven_day.resets_at // 0' 2>/dev/null)")
-        ACC_TS+=("$(printf '%s' "$d" | jq -r '.ts // 0' 2>/dev/null)")
-        ACC_CLR+=("${CLR_ACCT[$(( acc_i % 4 ))]}")
-        [ ${#lbl} -gt $MAXLBL ] && MAXLBL=${#lbl}
-        acc_i=$(( acc_i + 1 ))
-    done
-fi
-
-# Row: context — aligned so its bar sits under the per-account bars.
-if [ -n "$SB_CTXPCT" ]; then
-    sb_bar "$SB_CTXPCT" 10; pc=$(sb_thr "$SB_CTXPCT")
-    clabel=$(printf '%-*s' "$(( MAXLBL + 7 ))" "Context")
-    add_row "${clabel}${_BP} ${SB_CTXPCT}%" \
-            "${DIM}${clabel}${NC}${_BC} ${pc}${SB_CTXPCT}%${NC}"
-fi
-
-# Row(s): one per account — 5h and 7d bars; active first, marked "> " with reset times.
-# ASCII-only (marker, separators, percentages) so column widths are identical across
-# rows regardless of how the terminal renders ambiguous-width Unicode glyphs.
-sb_render_acct() {  # $1=index into ACC_* arrays
-    local k=$1 lbl="${ACC_LBL[$1]}" p5="${ACC_5P[$1]}" r5="${ACC_5R[$1]}"
-    local p7="${ACC_7P[$1]}" r7="${ACC_7R[$1]}" ts="${ACC_TS[$1]}" acol="${ACC_CLR[$1]}"
-    local mkp lblpad bar5 bc5 bar7 bc7 c5 c7 tail p5f p7f
-    if [ "$lbl" = "$SB_ACCT" ]; then mkp="> "; tail="$(sb_durc $(( r5 - SB_NOW )))/$(sb_durc $(( r7 - SB_NOW )))"
-    else mkp="  "; tail="$(sb_age $(( SB_NOW - ts ))) ago"; fi
-    lblpad=$(printf '%-*s' "$MAXLBL" "$lbl")
-    p5f=$(printf '%3d' "${p5:-0}"); p7f=$(printf '%3d' "${p7:-0}")
-    sb_bar "$p5" 10; bar5="$_BP"; bc5="$_BC"; c5=$(sb_thr "$p5")
-    sb_bar "$p7" 10; bar7="$_BP"; bc7="$_BC"; c7=$(sb_thr "$p7")
-    add_row "${mkp}${lblpad}  5h ${bar5} ${p5f}%  7d ${bar7} ${p7f}%  ${tail}" \
-            "${MKC}${mkp}${NC}${acol}${lblpad}${NC}  ${DIM}5h${NC} ${bc5} ${c5}${p5f}%${NC}  ${DIM}7d${NC} ${bc7} ${c7}${p7f}%${NC}  ${DIM}${tail}${NC}"
+# Row: context + this account's 5h / 7d usage, all on one line. Each window's
+# reset countdown sits right behind its own bar. ASCII-only so columns stay put.
+P=""; D=""
+sb_append() {  # $1=plain $2=colored — joins segments with a dim " | "
+    [ -z "$1" ] && return
+    if [ -n "$P" ]; then P+=" | "; D+="${CLR_SEP} | ${NC}"; fi
+    P+="$1"; D+="$2"
 }
-for (( k=0; k<${#ACC_LBL[@]}; k++ )); do [ "${ACC_LBL[$k]}" = "$SB_ACCT" ] && sb_render_acct "$k"; done
-for (( k=0; k<${#ACC_LBL[@]}; k++ )); do [ "${ACC_LBL[$k]}" != "$SB_ACCT" ] && sb_render_acct "$k"; done
+if [ -n "$SB_CTXPCT" ]; then
+    sb_bar "$SB_CTXPCT" 8; cc=$(sb_thr "$SB_CTXPCT")
+    sb_append "Context ${_BP} ${SB_CTXPCT}%" \
+              "${DIM}Context${NC} ${_BC} ${cc}${SB_CTXPCT}%${NC}"
+fi
+if [ -n "$SB_5HPCT" ]; then
+    r5="$(sb_durc $(( ${SB_5HRST:-0} - SB_NOW )))"
+    sb_bar "$SB_5HPCT" 8; c5=$(sb_thr "$SB_5HPCT")
+    sb_append "5h ${_BP} ${SB_5HPCT}% ${r5}" \
+              "${DIM}5h${NC} ${_BC} ${c5}${SB_5HPCT}%${NC} ${DIM}${r5}${NC}"
+fi
+if [ -n "$SB_7DPCT" ]; then
+    r7="$(sb_durc $(( ${SB_7DRST:-0} - SB_NOW )))"
+    sb_bar "$SB_7DPCT" 8; c7=$(sb_thr "$SB_7DPCT")
+    sb_append "7d ${_BP} ${SB_7DPCT}% ${r7}" \
+              "${DIM}7d${NC} ${_BC} ${c7}${SB_7DPCT}%${NC} ${DIM}${r7}${NC}"
+fi
+[ -n "$P" ] && add_row "$P" "$D"
 
 # ─── Output ───────────────────────────────────────────────────────────────────
 # Rows = max(buddy art height, left-bar rows); each side blanks past its own length.
