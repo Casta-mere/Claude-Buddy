@@ -416,8 +416,8 @@ if [ -n "$SB_MODEL" ] || [ -n "$SB_EMAIL" ]; then
             e=$(sb_cap "$SB_EFFORT"); effP=" | $e"; effC="${DIM} | ${NC}${CLR_THINK}${e}${NC}"
         fi
         [ "$SB_FAST" = "true" ] && { effP="$effP | Fast"; effC="${effC}${DIM} | ${NC}${CLR_FAST}Fast${NC}"; }
-        P="[${SB_MODEL}${WINLBL}${effP}]"
-        D="${DIM}[${NC}${CLR_MODEL}${SB_MODEL}${NC}${DIM}${WINLBL}${NC}${effC}${DIM}]${NC}"
+        P="${SB_MODEL}${WINLBL}${effP}"
+        D="${CLR_MODEL}${SB_MODEL}${NC}${DIM}${WINLBL}${NC}${effC}"
     fi
     if [ -n "$SB_EMAIL" ]; then
         if [ -n "$P" ]; then P+=" | ${SB_EMAIL}"; D+="${CLR_SEP} | ${NC}${DIM}${SB_EMAIL}${NC}"
@@ -430,8 +430,8 @@ fi
 if [ -n "$SB_CWD" ]; then
     dn=$(basename "$SB_CWD")
     if [ -n "$SB_BRANCH" ]; then
-        P="${dn} git:(${SB_BRANCH})"
-        D="${CLR_DIR}${dn}${NC} ${DIM}git:(${NC}${CLR_BRANCH}${SB_BRANCH}${NC}${DIM})${NC}"
+        P="${dn}:${SB_BRANCH}"
+        D="${CLR_DIR}${dn}${NC}${DIM}:${NC}${CLR_BRANCH}${SB_BRANCH}${NC}"
     else
         P="$dn"; D="${CLR_DIR}${dn}${NC}"
     fi
