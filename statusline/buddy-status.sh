@@ -413,77 +413,85 @@ sb_cap() {  # capitalize first letter
 LEFT_P=(); LEFT_D=()  # one entry per left row: plain (for width) / colored (for display)
 add_row() { LEFT_P+=("$1"); LEFT_D+=("$2"); }
 
+# Width-aware rows: collect segments, then emit as many (left-to-right) as fit the
+# budget so narrow terminals drop trailing segments cleanly instead of overlapping
+# the speech bubble. ROWBUDGET leaves a 2-col gap before the bubble.
+ROWBUDGET=$(( PAD - 2 )); [ "$ROWBUDGET" -lt 1 ] && ROWBUDGET=1
+SEG_P=(); SEG_D=()
+sb_seg() { [ -z "$1" ] && return; SEG_P+=("$1"); SEG_D+=("$2"); }
+sb_emit() {  # assemble collected segments within ROWBUDGET, then reset
+    local i P="" D="" sp sd
+    for (( i=0; i<${#SEG_P[@]}; i++ )); do
+        sp="${SEG_P[$i]}"; sd="${SEG_D[$i]}"
+        if [ -z "$P" ]; then
+            if [ ${#sp} -gt "$ROWBUDGET" ]; then P="${sp:0:$ROWBUDGET}"; D="${sp:0:$ROWBUDGET}"
+            else P="$sp"; D="$sd"; fi
+        elif [ $(( ${#P} + 3 + ${#sp} )) -le "$ROWBUDGET" ]; then
+            P="$P | $sp"; D="${D}${CLR_SEP} | ${NC}${sd}"
+        else
+            break
+        fi
+    done
+    [ -n "$P" ] && add_row "$P" "$D"
+    SEG_P=(); SEG_D=()
+}
+
 WINLBL=""
 if [ -n "$SB_WINSIZE" ]; then
     if [ "$SB_WINSIZE" -ge 1000000 ] 2>/dev/null; then WINLBL=" (1M context)"
     elif [ "$SB_WINSIZE" -ge 1000 ] 2>/dev/null; then WINLBL=" ($(( SB_WINSIZE/1000 ))K context)"; fi
 fi
 
-# Row: identity — [model (window) | effort] · email
-if [ -n "$SB_MODEL" ] || [ -n "$SB_EMAIL" ]; then
-    P=""; D=""
-    if [ -n "$SB_MODEL" ]; then
-        effP=""; effC=""
-        if [ "$SB_THINKON" = "true" ] && [ -n "$SB_EFFORT" ]; then
-            e=$(sb_cap "$SB_EFFORT"); effP=" | $e"; effC="${DIM} | ${NC}${CLR_THINK}${e}${NC}"
-        fi
-        [ "$SB_FAST" = "true" ] && { effP="$effP | Fast"; effC="${effC}${DIM} | ${NC}${CLR_FAST}Fast${NC}"; }
-        P="${SB_MODEL}${WINLBL}${effP}"
-        D="${CLR_MODEL}${SB_MODEL}${NC}${DIM}${WINLBL}${NC}${effC}"
-    fi
-    if [ -n "$SB_EMAIL" ]; then
-        if [ -n "$P" ]; then P+=" | ${SB_EMAIL}"; D+="${CLR_SEP} | ${NC}${DIM}${SB_EMAIL}${NC}"
-        else P="$SB_EMAIL"; D="${DIM}${SB_EMAIL}${NC}"; fi
-    fi
-    add_row "$P" "$D"
+# Row: identity — model (window) | effort | email. Trailing segments drop first
+# when the terminal is too narrow (email, then effort).
+if [ -n "$SB_MODEL" ]; then
+    sb_seg "${SB_MODEL}${WINLBL}" "${CLR_MODEL}${SB_MODEL}${NC}${DIM}${WINLBL}${NC}"
 fi
+if [ "$SB_THINKON" = "true" ] && [ -n "$SB_EFFORT" ]; then
+    e=$(sb_cap "$SB_EFFORT"); sb_seg "$e" "${CLR_THINK}${e}${NC}"
+fi
+[ "$SB_FAST" = "true" ] && sb_seg "Fast" "${CLR_FAST}Fast${NC}"
+[ -n "$SB_EMAIL" ] && sb_seg "$SB_EMAIL" "${DIM}${SB_EMAIL}${NC}"
+sb_emit
 
-# Row: workspace — dir git:(branch) · timer
+# Row: workspace — dir:branch (dirty + ahead/behind) | timer. Timer drops first when narrow.
 if [ -n "$SB_CWD" ]; then
     dn=$(basename "$SB_CWD")
     if [ -n "$SB_BRANCH" ]; then
-        P="${dn}:${SB_BRANCH}${SB_DIRTY}"
-        D="${CLR_DIR}${dn}${NC}${DIM}:${NC}${CLR_BRANCH}${SB_BRANCH}${NC}${CLR_YEL}${SB_DIRTY}${NC}"
+        bp="${dn}:${SB_BRANCH}${SB_DIRTY}"
+        bd="${CLR_DIR}${dn}${NC}${DIM}:${NC}${CLR_BRANCH}${SB_BRANCH}${NC}${CLR_YEL}${SB_DIRTY}${NC}"
         ab=""; abc=""
         [ "$SB_AHEAD" -gt 0 ] 2>/dev/null && { ab="+${SB_AHEAD}"; abc="${CLR_GREEN}+${SB_AHEAD}${NC}"; }
         [ "$SB_BEHIND" -gt 0 ] 2>/dev/null && { ab="${ab:+$ab/}-${SB_BEHIND}"; abc="${abc:+$abc${DIM}/${NC}}${CLR_RED}-${SB_BEHIND}${NC}"; }
-        [ -n "$ab" ] && { P+=" ${ab}"; D+=" ${abc}"; }
+        [ -n "$ab" ] && { bp="$bp $ab"; bd="$bd $abc"; }
+        sb_seg "$bp" "$bd"
     else
-        P="$dn"; D="${CLR_DIR}${dn}${NC}"
+        sb_seg "$dn" "${CLR_DIR}${dn}${NC}"
     fi
-    if [ -n "$SB_DURMS" ]; then
-        t=$(sb_dur $(( SB_DURMS/1000 )))
-        P+=" | ${t}"; D+="${CLR_SEP} | ${NC}${CLR_TIMER}${t}${NC}"
-    fi
-    add_row "$P" "$D"
+    [ -n "$SB_DURMS" ] && { t=$(sb_dur $(( SB_DURMS/1000 ))); sb_seg "$t" "${CLR_TIMER}${t}${NC}"; }
+    sb_emit
 fi
 
-# Row: context + this account's 5h / 7d usage, all on one line. Each window's
-# reset countdown sits right behind its own bar. ASCII-only so columns stay put.
-P=""; D=""
-sb_append() {  # $1=plain $2=colored — joins segments with a dim " | "
-    [ -z "$1" ] && return
-    if [ -n "$P" ]; then P+=" | "; D+="${CLR_SEP} | ${NC}"; fi
-    P+="$1"; D+="$2"
-}
+# Row: context + this account's 5h / 7d usage on one line; each window's reset
+# countdown sits right behind its bar. 7d drops first when narrow, then 5h.
 if [ -n "$SB_CTXPCT" ]; then
     sb_bar "$SB_CTXPCT" 8; cc=$(sb_thr "$SB_CTXPCT")
-    sb_append "Context ${_BP} ${SB_CTXPCT}%" \
-              "${DIM}Context${NC} ${_BC} ${cc}${SB_CTXPCT}%${NC}"
+    sb_seg "Context ${_BP} ${SB_CTXPCT}%" \
+           "${DIM}Context${NC} ${_BC} ${cc}${SB_CTXPCT}%${NC}"
 fi
 if [ -n "$SB_5HPCT" ]; then
     r5="$(sb_durc $(( ${SB_5HRST:-0} - SB_NOW )))"
     sb_bar "$SB_5HPCT" 8; c5=$(sb_thr "$SB_5HPCT")
-    sb_append "5h ${_BP} ${SB_5HPCT}% ${r5}" \
-              "${DIM}5h${NC} ${_BC} ${c5}${SB_5HPCT}%${NC} ${DIM}${r5}${NC}"
+    sb_seg "5h ${_BP} ${SB_5HPCT}% ${r5}" \
+           "${DIM}5h${NC} ${_BC} ${c5}${SB_5HPCT}%${NC} ${DIM}${r5}${NC}"
 fi
 if [ -n "$SB_7DPCT" ]; then
     r7="$(sb_durc $(( ${SB_7DRST:-0} - SB_NOW )))"
     sb_bar "$SB_7DPCT" 8; c7=$(sb_thr "$SB_7DPCT")
-    sb_append "7d ${_BP} ${SB_7DPCT}% ${r7}" \
-              "${DIM}7d${NC} ${_BC} ${c7}${SB_7DPCT}%${NC} ${DIM}${r7}${NC}"
+    sb_seg "7d ${_BP} ${SB_7DPCT}% ${r7}" \
+           "${DIM}7d${NC} ${_BC} ${c7}${SB_7DPCT}%${NC} ${DIM}${r7}${NC}"
 fi
-[ -n "$P" ] && add_row "$P" "$D"
+sb_emit
 
 # ─── Output ───────────────────────────────────────────────────────────────────
 # Rows = max(buddy art height, left-bar rows); each side blanks past its own length.
