@@ -39,9 +39,25 @@ SB_5HPCT=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.five_hour.used_percentag
 SB_5HRST=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.five_hour.resets_at // empty' 2>/dev/null)
 SB_7DPCT=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.seven_day.used_percentage // empty' 2>/dev/null)
 SB_7DRST=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.seven_day.resets_at // empty' 2>/dev/null)
-SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null)
+# Account identity from CLAUDE_CONFIG_DIR (e.g. ~/.claude-work → "claude-work").
+SB_CFGDIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SB_ACCT=$(basename "$SB_CFGDIR"); SB_ACCT="${SB_ACCT#.}"; [ -z "$SB_ACCT" ] && SB_ACCT="claude"
+SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$SB_CFGDIR/.claude.json" 2>/dev/null)
+[ -z "$SB_EMAIL" ] && SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null)
 SB_BRANCH=""
 [ -n "$SB_CWD" ] && SB_BRANCH=$(git -C "$SB_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+# Shared write-through usage cache: each account leaves its latest rate-limit
+# snapshot here so the bar can show every account, not just the active session's.
+SB_USAGE_DIR="$HOME/.claude-buddy/usage"
+SB_NOW=$(date +%s)
+if [ -n "$SB_5HPCT" ]; then
+    mkdir -p "$SB_USAGE_DIR" 2>/dev/null
+    SB_TMP="$SB_USAGE_DIR/.${SB_ACCT}.$$.tmp"
+    printf '{"label":"%s","email":"%s","five_hour":{"pct":%s,"resets_at":%s},"seven_day":{"pct":%s,"resets_at":%s},"ts":%s}\n' \
+        "$SB_ACCT" "$SB_EMAIL" "${SB_5HPCT:-0}" "${SB_5HRST:-0}" "${SB_7DPCT:-0}" "${SB_7DRST:-0}" "$SB_NOW" \
+        > "$SB_TMP" 2>/dev/null && mv -f "$SB_TMP" "$SB_USAGE_DIR/${SB_ACCT}.json" 2>/dev/null
+fi
 
 # ─── Animation ───────────────────────────────────────────────────────────────
 SEQ=(0 0 0 0 1 0 0 0 -1 0 0 2 0 0 0)
@@ -323,7 +339,7 @@ if [ $BUBBLE_COUNT -gt 2 ]; then
     CONNECTOR_BI=$(( (FIRST_TEXT + LAST_TEXT) / 2 ))
 fi
 
-# ─── Left status bar (2 lines) ────────────────────────────────────────────────
+# ─── Left status bar (stacked: identity / workspace / context / one row per account) ──
 # Palette (truecolor). Block glyphs are 1 display column each; LC_ALL keeps ${#} honest.
 CLR_MODEL=$'\033[1;38;2;130;170;255m'   # model name (bold blue)
 CLR_THINK=$'\033[38;2;199;146;234m'     # thinking level (mauve)
@@ -335,6 +351,13 @@ CLR_GREEN=$'\033[38;2;120;200;120m'     # usage < 50%
 CLR_YEL=$'\033[38;2;235;200;90m'        # usage 50-79%
 CLR_RED=$'\033[38;2;235;110;110m'       # usage >= 80%
 CLR_TRACK=$'\033[38;2;78;82;94m'        # empty bar track
+CLR_SEP=$'\033[38;2;75;79;98m'          # " | " separators
+MKC="$CLR_GREEN"                         # active-account marker ▸
+# Per-account tints (cycled by account, so each keeps its color regardless of which is active)
+CLR_ACCT=("$(printf '\033[1;38;2;125;207;255m')" \
+          "$(printf '\033[1;38;2;199;148;246m')" \
+          "$(printf '\033[1;38;2;115;208;196m')" \
+          "$(printf '\033[1;38;2;224;175;104m')")
 
 sb_thr() {  # $1=pct -> echo threshold color
     if   [ "${1:-0}" -lt 50 ] 2>/dev/null; then printf '%s' "$CLR_GREEN"
@@ -358,7 +381,7 @@ sb_bar() {  # $1=pct $2=width -> sets _BP and _BC (filled=threshold color, empty
     done
     _BC+="${NC}"
 }
-sb_dur() {  # $1=seconds -> "Xd Yh" / "Xh Ym" / "Zm"
+sb_dur() {  # $1=seconds -> "Xd Yh" / "Xh Ym" / "Zm" (spaced)
     local s=$1 d h m
     [ "${s:-0}" -lt 0 ] 2>/dev/null && s=0
     d=$(( s/86400 )); h=$(( (s%86400)/3600 )); m=$(( (s%3600)/60 ))
@@ -366,79 +389,125 @@ sb_dur() {  # $1=seconds -> "Xd Yh" / "Xh Ym" / "Zm"
     elif [ $h -gt 0 ]; then printf '%dh %dm' "$h" "$m"
     else printf '%dm' "$m"; fi
 }
+sb_durc() {  # compact two-unit: "5d21h" / "1h57m" / "57m"
+    local s=$1 d h m
+    [ "${s:-0}" -lt 0 ] 2>/dev/null && s=0
+    d=$(( s/86400 )); h=$(( (s%86400)/3600 )); m=$(( (s%3600)/60 ))
+    if [ $d -gt 0 ]; then printf '%dd%dh' "$d" "$h"
+    elif [ $h -gt 0 ]; then printf '%dh%dm' "$h" "$m"
+    else printf '%dm' "$m"; fi
+}
+sb_age() {  # one-unit: "2h" / "3d" / "5m"
+    local s=$1 d h m
+    [ "${s:-0}" -lt 0 ] 2>/dev/null && s=0
+    d=$(( s/86400 )); h=$(( (s%86400)/3600 )); m=$(( (s%3600)/60 ))
+    if [ $d -gt 0 ]; then printf '%dd' "$d"
+    elif [ $h -gt 0 ]; then printf '%dh' "$h"
+    else printf '%dm' "$m"; fi
+}
 sb_cap() {  # capitalize first letter
     printf '%s%s' "$(printf '%s' "${1:0:1}" | tr '[:lower:]' '[:upper:]')" "${1:1}"
 }
-CURP=""; CURD=""  # segment accumulators (plain / display); no namerefs (macOS bash 3.2)
-sb_seg() {  # $1=plain $2=colored — appends with dim " | " separator, skips empties
-    [ -z "$1" ] && return
-    if [ -n "$CURP" ]; then CURP+=" | "; CURD+="${DIM} | ${NC}"; fi
-    CURP+="$1"; CURD+="$2"
-}
+LEFT_P=(); LEFT_D=()  # one entry per left row: plain (for width) / colored (for display)
+add_row() { LEFT_P+=("$1"); LEFT_D+=("$2"); }
 
-# Line 1: [model (window) | effort] | dir git:(branch) | email | timer
 WINLBL=""
 if [ -n "$SB_WINSIZE" ]; then
     if [ "$SB_WINSIZE" -ge 1000000 ] 2>/dev/null; then WINLBL=" (1M context)"
     elif [ "$SB_WINSIZE" -ge 1000 ] 2>/dev/null; then WINLBL=" ($(( SB_WINSIZE/1000 ))K context)"; fi
 fi
-CURP=""; CURD=""
-if [ -n "$SB_MODEL" ]; then
-    effP=""; effC=""
-    if [ "$SB_THINKON" = "true" ] && [ -n "$SB_EFFORT" ]; then
-        e=$(sb_cap "$SB_EFFORT"); effP=" | $e"; effC="${DIM} | ${NC}${CLR_THINK}${e}${NC}"
+
+# Row: identity — [model (window) | effort] · email
+if [ -n "$SB_MODEL" ] || [ -n "$SB_EMAIL" ]; then
+    P=""; D=""
+    if [ -n "$SB_MODEL" ]; then
+        effP=""; effC=""
+        if [ "$SB_THINKON" = "true" ] && [ -n "$SB_EFFORT" ]; then
+            e=$(sb_cap "$SB_EFFORT"); effP=" | $e"; effC="${DIM} | ${NC}${CLR_THINK}${e}${NC}"
+        fi
+        [ "$SB_FAST" = "true" ] && { effP="$effP | Fast"; effC="${effC}${DIM} | ${NC}${CLR_FAST}Fast${NC}"; }
+        P="[${SB_MODEL}${WINLBL}${effP}]"
+        D="${DIM}[${NC}${CLR_MODEL}${SB_MODEL}${NC}${DIM}${WINLBL}${NC}${effC}${DIM}]${NC}"
     fi
-    [ "$SB_FAST" = "true" ] && { effP="$effP | Fast"; effC="${effC}${DIM} | ${NC}${CLR_FAST}Fast${NC}"; }
-    sb_seg "[${SB_MODEL}${WINLBL}${effP}]" \
-           "${DIM}[${NC}${CLR_MODEL}${SB_MODEL}${NC}${DIM}${WINLBL}${NC}${effC}${DIM}]${NC}"
+    if [ -n "$SB_EMAIL" ]; then
+        if [ -n "$P" ]; then P+=" | ${SB_EMAIL}"; D+="${CLR_SEP} | ${NC}${DIM}${SB_EMAIL}${NC}"
+        else P="$SB_EMAIL"; D="${DIM}${SB_EMAIL}${NC}"; fi
+    fi
+    add_row "$P" "$D"
 fi
+
+# Row: workspace — dir git:(branch) · timer
 if [ -n "$SB_CWD" ]; then
     dn=$(basename "$SB_CWD")
     if [ -n "$SB_BRANCH" ]; then
-        sb_seg "${dn} git:(${SB_BRANCH})" \
-               "${CLR_DIR}${dn}${NC} ${DIM}git:(${NC}${CLR_BRANCH}${SB_BRANCH}${NC}${DIM})${NC}"
+        P="${dn} git:(${SB_BRANCH})"
+        D="${CLR_DIR}${dn}${NC} ${DIM}git:(${NC}${CLR_BRANCH}${SB_BRANCH}${NC}${DIM})${NC}"
     else
-        sb_seg "${dn}" "${CLR_DIR}${dn}${NC}"
+        P="$dn"; D="${CLR_DIR}${dn}${NC}"
     fi
+    if [ -n "$SB_DURMS" ]; then
+        t=$(sb_dur $(( SB_DURMS/1000 )))
+        P+=" | ${t}"; D+="${CLR_SEP} | ${NC}${CLR_TIMER}${t}${NC}"
+    fi
+    add_row "$P" "$D"
 fi
-[ -n "$SB_EMAIL" ] && sb_seg "$SB_EMAIL" "${DIM}${SB_EMAIL}${NC}"
-if [ -n "$SB_DURMS" ]; then
-    t=$(sb_dur $(( SB_DURMS/1000 )))
-    sb_seg "$t" "${CLR_TIMER}${t}${NC}"
-fi
-BAR0_P="$CURP"; BAR0_D="$CURD"
 
-# Line 2: Context bar % | Usage(5h) bar % (resets) | weekly bar % (resets)
-CURP=""; CURD=""
-NOW2=$(date +%s)
+# Gather cached accounts (active account's file was just refreshed above).
+ACC_LBL=(); ACC_5P=(); ACC_5R=(); ACC_7P=(); ACC_7R=(); ACC_TS=(); ACC_CLR=()
+MAXLBL=0; acc_i=0
+if [ -d "$SB_USAGE_DIR" ]; then
+    for f in "$SB_USAGE_DIR"/*.json; do
+        [ -e "$f" ] || continue
+        d=$(cat "$f" 2>/dev/null)
+        lbl=$(printf '%s' "$d" | jq -r '.label // empty' 2>/dev/null)
+        [ -z "$lbl" ] && continue
+        ACC_LBL+=("$lbl")
+        ACC_5P+=("$(printf '%s' "$d" | jq -r '.five_hour.pct // 0' 2>/dev/null)")
+        ACC_5R+=("$(printf '%s' "$d" | jq -r '.five_hour.resets_at // 0' 2>/dev/null)")
+        ACC_7P+=("$(printf '%s' "$d" | jq -r '.seven_day.pct // 0' 2>/dev/null)")
+        ACC_7R+=("$(printf '%s' "$d" | jq -r '.seven_day.resets_at // 0' 2>/dev/null)")
+        ACC_TS+=("$(printf '%s' "$d" | jq -r '.ts // 0' 2>/dev/null)")
+        ACC_CLR+=("${CLR_ACCT[$(( acc_i % 4 ))]}")
+        [ ${#lbl} -gt $MAXLBL ] && MAXLBL=${#lbl}
+        acc_i=$(( acc_i + 1 ))
+    done
+fi
+
+# Row: context — aligned so its bar sits under the per-account bars.
 if [ -n "$SB_CTXPCT" ]; then
     sb_bar "$SB_CTXPCT" 10; pc=$(sb_thr "$SB_CTXPCT")
-    sb_seg "Context ${_BP} ${SB_CTXPCT}%" \
-           "${DIM}Context ${NC}${_BC} ${pc}${SB_CTXPCT}%${NC}"
+    clabel=$(printf '%-*s' "$(( MAXLBL + 7 ))" "Context")
+    add_row "${clabel}${_BP} ${SB_CTXPCT}%" \
+            "${DIM}${clabel}${NC}${_BC} ${pc}${SB_CTXPCT}%${NC}"
 fi
-if [ -n "$SB_5HPCT" ]; then
-    rst=""; [ -n "$SB_5HRST" ] && rst=" (resets in $(sb_dur $(( SB_5HRST - NOW2 ))))"
-    sb_bar "$SB_5HPCT" 10; pc=$(sb_thr "$SB_5HPCT")
-    sb_seg "Usage ${_BP} ${SB_5HPCT}%${rst}" \
-           "${DIM}Usage ${NC}${_BC} ${pc}${SB_5HPCT}%${NC}${DIM}${rst}${NC}"
-fi
-if [ -n "$SB_7DPCT" ]; then
-    rst=""; [ -n "$SB_7DRST" ] && rst=" (resets in $(sb_dur $(( SB_7DRST - NOW2 ))))"
-    sb_bar "$SB_7DPCT" 10; pc=$(sb_thr "$SB_7DPCT")
-    sb_seg "Week ${_BP} ${SB_7DPCT}%${rst}" \
-           "${DIM}Week ${NC}${_BC} ${pc}${SB_7DPCT}%${NC}${DIM}${rst}${NC}"
-fi
-BAR1_P="$CURP"; BAR1_D="$CURD"
+
+# Row(s): one per account — 5h and 7d bars; active first, marked "> " with reset times.
+# ASCII-only (marker, separators, percentages) so column widths are identical across
+# rows regardless of how the terminal renders ambiguous-width Unicode glyphs.
+sb_render_acct() {  # $1=index into ACC_* arrays
+    local k=$1 lbl="${ACC_LBL[$1]}" p5="${ACC_5P[$1]}" r5="${ACC_5R[$1]}"
+    local p7="${ACC_7P[$1]}" r7="${ACC_7R[$1]}" ts="${ACC_TS[$1]}" acol="${ACC_CLR[$1]}"
+    local mkp lblpad bar5 bc5 bar7 bc7 c5 c7 tail p5f p7f
+    if [ "$lbl" = "$SB_ACCT" ]; then mkp="> "; tail="$(sb_durc $(( r5 - SB_NOW )))/$(sb_durc $(( r7 - SB_NOW )))"
+    else mkp="  "; tail="$(sb_age $(( SB_NOW - ts ))) ago"; fi
+    lblpad=$(printf '%-*s' "$MAXLBL" "$lbl")
+    p5f=$(printf '%3d' "${p5:-0}"); p7f=$(printf '%3d' "${p7:-0}")
+    sb_bar "$p5" 10; bar5="$_BP"; bc5="$_BC"; c5=$(sb_thr "$p5")
+    sb_bar "$p7" 10; bar7="$_BP"; bc7="$_BC"; c7=$(sb_thr "$p7")
+    add_row "${mkp}${lblpad}  5h ${bar5} ${p5f}%  7d ${bar7} ${p7f}%  ${tail}" \
+            "${MKC}${mkp}${NC}${acol}${lblpad}${NC}  ${DIM}5h${NC} ${bc5} ${c5}${p5f}%${NC}  ${DIM}7d${NC} ${bc7} ${c7}${p7f}%${NC}  ${DIM}${tail}${NC}"
+}
+for (( k=0; k<${#ACC_LBL[@]}; k++ )); do [ "${ACC_LBL[$k]}" = "$SB_ACCT" ] && sb_render_acct "$k"; done
+for (( k=0; k<${#ACC_LBL[@]}; k++ )); do [ "${ACC_LBL[$k]}" != "$SB_ACCT" ] && sb_render_acct "$k"; done
 
 # ─── Output ───────────────────────────────────────────────────────────────────
-for (( i=0; i<ART_COUNT; i++ )); do
-    art_part="${ALL_COLORS[$i]}${ALL_LINES[$i]}${NC}"
-
-    # Left region holds the status bar on the top two rows; blank elsewhere.
-    # B (Braille Blank) at line start prevents JS .trim() from stripping padding.
-    if [ $i -eq 0 ]; then lp="$BAR0_P"; ld="$BAR0_D"
-    elif [ $i -eq 1 ]; then lp="$BAR1_P"; ld="$BAR1_D"
-    else lp=""; ld=""; fi
+# Rows = max(buddy art height, left-bar rows); each side blanks past its own length.
+# B (Braille Blank) at line start prevents JS .trim() from stripping padding.
+NLEFT=${#LEFT_D[@]}
+ROWS=$ART_COUNT; [ $NLEFT -gt $ROWS ] && ROWS=$NLEFT
+for (( i=0; i<ROWS; i++ )); do
+    if [ $i -lt $ART_COUNT ]; then art_part="${ALL_COLORS[$i]}${ALL_LINES[$i]}${NC}"; else art_part=""; fi
+    if [ $i -lt $NLEFT ]; then lp="${LEFT_P[$i]}"; ld="${LEFT_D[$i]}"; else lp=""; ld=""; fi
     lplen=${#lp}
     if [ "$lplen" -le "$PAD" ]; then
         leftfield="${ld}$(printf '%*s' "$(( PAD - lplen ))" '')"
