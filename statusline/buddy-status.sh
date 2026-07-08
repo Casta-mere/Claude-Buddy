@@ -2,9 +2,15 @@
 # claude-buddy status line — animated, right-aligned multi-line companion
 # Uses Braille Blank (U+2800) for padding — survives JS .trim()
 
-# UTF-8 locale so ${#str} counts display columns (block glyphs = 1 col), keeping
-# the right-alignment width math exact even with Unicode bars.
-export LC_ALL=en_US.UTF-8
+# UTF-8 char handling so ${#str} counts display columns (block glyphs = 1 col),
+# keeping the right-alignment width math exact. LC_CTYPE only — not LC_ALL — so
+# subprocess collation/messages are untouched; no-op if already UTF-8.
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8|*[Uu][Tt][Ff]8) ;;
+    *) unset LC_ALL
+       if locale -a 2>/dev/null | grep -qiE '^en_US\.utf-?8$'; then export LC_CTYPE=en_US.UTF-8
+       else export LC_CTYPE=C.UTF-8; fi ;;
+esac
 
 STATE="$HOME/.claude-buddy/status.json"
 COMPANION="$HOME/.claude-buddy/companion.json"
@@ -24,24 +30,37 @@ RARITY=$(jq -r '.rarity // "common"' "$STATE" 2>/dev/null)
 REACTION=$(jq -r '.reaction // ""' "$STATE" 2>/dev/null)
 E=$(jq -r '.bones.eye // "o"' "$COMPANION" 2>/dev/null)
 
-INPUT=$(cat)  # Claude Code status JSON on stdin
+INPUT=""
+[ -t 0 ] || INPUT=$(cat)  # Claude Code status JSON on stdin (skip when run by hand)
 
 # ─── Status bar inputs (all optional; missing fields collapse cleanly) ────────
-SB_MODEL=$(printf '%s' "$INPUT"   | jq -r '.model.display_name // empty' 2>/dev/null)
-SB_EFFORT=$(printf '%s' "$INPUT"  | jq -r '.effort.level // empty' 2>/dev/null)
-SB_THINKON=$(printf '%s' "$INPUT" | jq -r '.thinking.enabled // false' 2>/dev/null)
-SB_FAST=$(printf '%s' "$INPUT"    | jq -r '.fast_mode // false' 2>/dev/null)
-SB_CWD=$(printf '%s' "$INPUT"     | jq -r '.workspace.current_dir // .cwd // empty' 2>/dev/null)
-SB_WINSIZE=$(printf '%s' "$INPUT" | jq -r '.context_window.context_window_size // empty' 2>/dev/null)
-SB_CTXPCT=$(printf '%s' "$INPUT"  | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
-SB_DURMS=$(printf '%s' "$INPUT"   | jq -r '.cost.total_duration_ms // empty' 2>/dev/null)
-SB_5HPCT=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.five_hour.used_percentage // empty' 2>/dev/null)
-SB_5HRST=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.five_hour.resets_at // empty' 2>/dev/null)
-SB_7DPCT=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.seven_day.used_percentage // empty' 2>/dev/null)
-SB_7DRST=$(printf '%s' "$INPUT"   | jq -r '.rate_limits.seven_day.resets_at // empty' 2>/dev/null)
-# Account identity from CLAUDE_CONFIG_DIR (e.g. ~/.claude-work → "claude-work").
+# One jq call extracts every field, one per line ("" when missing). Fields used
+# in bash arithmetic are floored to integers ("" if non-numeric) so $(( )) never
+# sees floats like used_percentage 61.4.
+SBF=()
+if [ -n "$INPUT" ]; then
+    while IFS= read -r _f; do SBF+=("$_f"); done < <(printf '%s' "$INPUT" | jq -r '
+        def num: if type == "number" then floor else "" end;
+        (.model.display_name // ""),
+        (.effort.level // ""),
+        (.thinking.enabled == true | tostring),
+        (.fast_mode == true | tostring),
+        (.workspace.current_dir // .cwd // ""),
+        (.context_window.context_window_size | num),
+        (.context_window.used_percentage | num),
+        (.cost.total_duration_ms | num),
+        (.rate_limits.five_hour.used_percentage | num),
+        (.rate_limits.five_hour.resets_at | num),
+        (.rate_limits.seven_day.used_percentage | num),
+        (.rate_limits.seven_day.resets_at | num)
+    ' 2>/dev/null)
+fi
+SB_MODEL="${SBF[0]:-}";  SB_EFFORT="${SBF[1]:-}";  SB_THINKON="${SBF[2]:-}"
+SB_FAST="${SBF[3]:-}";   SB_CWD="${SBF[4]:-}";     SB_WINSIZE="${SBF[5]:-}"
+SB_CTXPCT="${SBF[6]:-}"; SB_DURMS="${SBF[7]:-}";   SB_5HPCT="${SBF[8]:-}"
+SB_5HRST="${SBF[9]:-}";  SB_7DPCT="${SBF[10]:-}";  SB_7DRST="${SBF[11]:-}"
+# Account email from CLAUDE_CONFIG_DIR (e.g. ~/.claude-work), fallback ~/.claude.json
 SB_CFGDIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-SB_ACCT=$(basename "$SB_CFGDIR"); SB_ACCT="${SB_ACCT#.}"; [ -z "$SB_ACCT" ] && SB_ACCT="claude"
 SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$SB_CFGDIR/.claude.json" 2>/dev/null)
 [ -z "$SB_EMAIL" ] && SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null)
 SB_BRANCH=""; SB_DIRTY=""; SB_AHEAD=0; SB_BEHIND=0
@@ -341,8 +360,8 @@ if [ $BUBBLE_COUNT -gt 2 ]; then
     CONNECTOR_BI=$(( (FIRST_TEXT + LAST_TEXT) / 2 ))
 fi
 
-# ─── Left status bar (stacked: identity / workspace / context / one row per account) ──
-# Palette (truecolor). Block glyphs are 1 display column each; LC_ALL keeps ${#} honest.
+# ─── Left status bar (stacked: identity / workspace / context+usage) ──────────
+# Palette (truecolor). Block glyphs are 1 display column each; LC_CTYPE keeps ${#} honest.
 CLR_MODEL=$'\033[1;38;2;130;170;255m'   # model name (bold blue)
 CLR_THINK=$'\033[38;2;199;146;234m'     # thinking level (mauve)
 CLR_FAST=$'\033[38;2;255;176;102m'      # fast mode (amber)
@@ -354,12 +373,6 @@ CLR_YEL=$'\033[38;2;235;200;90m'        # usage 50-79%
 CLR_RED=$'\033[38;2;235;110;110m'       # usage >= 80%
 CLR_TRACK=$'\033[38;2;78;82;94m'        # empty bar track
 CLR_SEP=$'\033[38;2;75;79;98m'          # " | " separators
-MKC="$CLR_GREEN"                         # active-account marker ▸
-# Per-account tints (cycled by account, so each keeps its color regardless of which is active)
-CLR_ACCT=("$(printf '\033[1;38;2;125;207;255m')" \
-          "$(printf '\033[1;38;2;199;148;246m')" \
-          "$(printf '\033[1;38;2;115;208;196m')" \
-          "$(printf '\033[1;38;2;224;175;104m')")
 
 sb_thr() {  # $1=pct -> echo threshold color
     if   [ "${1:-0}" -lt 50 ] 2>/dev/null; then printf '%s' "$CLR_GREEN"
@@ -397,14 +410,6 @@ sb_durc() {  # compact two-unit: "5d21h" / "1h57m" / "57m"
     d=$(( s/86400 )); h=$(( (s%86400)/3600 )); m=$(( (s%3600)/60 ))
     if [ $d -gt 0 ]; then printf '%dd%dh' "$d" "$h"
     elif [ $h -gt 0 ]; then printf '%dh%dm' "$h" "$m"
-    else printf '%dm' "$m"; fi
-}
-sb_age() {  # one-unit: "2h" / "3d" / "5m"
-    local s=$1 d h m
-    [ "${s:-0}" -lt 0 ] 2>/dev/null && s=0
-    d=$(( s/86400 )); h=$(( (s%86400)/3600 )); m=$(( (s%3600)/60 ))
-    if [ $d -gt 0 ]; then printf '%dd' "$d"
-    elif [ $h -gt 0 ]; then printf '%dh' "$h"
     else printf '%dm' "$m"; fi
 }
 sb_cap() {  # capitalize first letter
