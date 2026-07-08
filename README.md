@@ -9,6 +9,7 @@ An animated terminal pet that lives in your Claude Code status line, reacts to e
 - 18 species (duck, cat, dragon, ghost, robot, axolotl, and more)
 - 5 rarity tiers (Common, Uncommon, Rare, Epic, Legendary)
 - Animated status line with speech bubbles
+- Left info bar: model + thinking level, dir/branch, context %, and the active account's 5h/7d usage with colored bars + reset times
 - Contextual reactions to errors, test failures, and successes
 - Deterministic identity — same account always gets the same buddy
 - Per-terminal isolation — each terminal window shows its own session's reaction
@@ -98,7 +99,7 @@ Claude Buddy uses four Claude Code extension points:
    - **SessionStart** (`session-start.sh`): greets new sessions or restores the reaction from a resumed session
    - **PostToolUse** (`react.sh`): detects errors/successes in Bash output
    - **Stop** (`buddy-comment.sh`): extracts `<!-- buddy: ... -->` comments from Claude's responses
-4. **Status Line** — animated bash script that reads the current terminal's TTY-scoped session file (falling back to `~/.claude-buddy/status.json`) and renders the buddy with a speech bubble.
+4. **Status Line** — animated bash script that reads the current terminal's TTY-scoped session file (falling back to `~/.claude-buddy/status.json`) and renders the buddy with a speech bubble. It also parses the JSON Claude Code sends on stdin to draw a left info bar beside the buddy: identity (model, context-window size, thinking level, email), workspace (`dir:branch` with dirty `*` and ahead/behind markers + timer), and a usage line combining context-window % with the active account's 5h/7d rate-limit usage — block-glyph bars colored by load, each window's reset countdown right behind its bar. Each terminal shows its own (active) account, live from stdin. Any field absent on your Claude Code version is silently hidden.
 
 ## Customization
 

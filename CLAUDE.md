@@ -40,7 +40,9 @@ Four integration points, all from a single plugin:
    - `session-start.sh` (SessionStart) — greets new sessions from `greetings.txt`; re-binds TTY mapping on resume
    - `react.sh` (PostToolUse/Bash) — detects errors/successes in Bash output
    - `buddy-comment.sh` (Stop) — extracts `<!-- buddy: ... -->` comments from Claude's responses
-4. **Status Line** (`statusline/buddy-status.sh`) — animated display; reads TTY-scoped `~/.claude-buddy/tty-sessions/{tty}` → `sessions/{id}.json`, falling back to `status.json`.
+4. **Status Line** (`statusline/buddy-status.sh`) — animated display; reads TTY-scoped `~/.claude-buddy/tty-sessions/{tty}` → `sessions/{id}.json`, falling back to `status.json`. Also parses Claude Code's status JSON on stdin to render a **left info bar** beside the buddy: identity (model + window size + thinking/effort level + active email), workspace (`dir:branch` with a `*` dirty marker and ASCII `+ahead/-behind` upstream counts, + session timer), then one line combining context % with the active account's 5h/7d rate-limit usage — block-glyph bars colored by load (green/yellow/red), each window's reset countdown right behind its own bar. Each terminal shows only its own (active) account, live from stdin. Missing JSON fields collapse cleanly; rows past the buddy's art height still render (and vice-versa) so nothing is lost.
+   - ASCII-only (separators, percentages) so columns stay put regardless of how a terminal renders ambiguous-width Unicode glyphs. Email reads `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claude.json` (falls back to `$HOME/.claude.json`).
+   - Exports a UTF-8 `LC_CTYPE` (only if the current locale isn't already UTF-8) so `${#str}` counts display columns (Unicode block glyphs = 1 col), keeping the right-alignment width math exact without touching subprocess collation/messages. Numeric JSON fields are floored to integers in a single `jq` pass so bash arithmetic never sees floats; a `[ -t 0 ]` guard skips the stdin read when run by hand.
 
 ## Source Layout
 
