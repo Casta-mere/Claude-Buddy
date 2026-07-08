@@ -18,12 +18,31 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // ""' 2>/dev/null)
 [ -z "$SESSION_ID" ] && exit 0
 
 SESSION_FILE="$SESSIONS_DIR/${SESSION_ID}.json"
-MY_TTY=$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
+
+# Hooks run detached from the terminal (own tty = "??"), so climb the process
+# tree to the nearest ancestor with a real controlling TTY — the Claude Code
+# process running in this terminal tab. Same walk the status line uses for width.
+find_tty() {
+  local pid=$$ tty
+  for _ in 1 2 3 4 5 6 7 8; do
+    tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ -n "$tty" ] && [ "$tty" != "??" ] && [ "$tty" != "-" ]; then
+      printf '%s' "$tty"
+      return 0
+    fi
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ -z "$pid" ] || [ "$pid" -le 1 ] 2>/dev/null; then break; fi
+  done
+  return 1
+}
+MY_TTY=$(find_tty)
 
 write_tty_mapping() {
-  if [ -n "$MY_TTY" ] && [ "$MY_TTY" != "??" ] && [ "$MY_TTY" != "-" ]; then
+  if [ -n "$MY_TTY" ]; then
     mkdir -p "$TTYS_DIR"
     echo "$SESSION_ID" > "$TTYS_DIR/$MY_TTY"
+    # Prune mappings for terminals long gone (stale > 7 days)
+    find "$TTYS_DIR" -type f -mtime +7 -delete 2>/dev/null
   fi
 }
 

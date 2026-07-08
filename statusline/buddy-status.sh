@@ -122,16 +122,18 @@ done
 [ "${COLS:-0}" -lt 40 ] && COLS=${COLUMNS:-0}
 [ "${COLS:-0}" -lt 40 ] && COLS=125
 
-# Override reaction with this terminal's session (TTY-scoped isolation)
+# Reaction isolation: with a known TTY, show only this terminal's own session
+# reaction — never another session's via the global file. Without a TTY, fall
+# back to the global reaction only while fresh (< 10 min), so a resolution
+# failure degrades to a quiet buddy instead of someone else's words.
 if [ -n "$TTY" ] && [ "$TTY" != "??" ] && [ "$TTY" != "-" ]; then
+  SESSION_REACTION=""
   SID=$(cat "$HOME/.claude-buddy/tty-sessions/$TTY" 2>/dev/null)
-  if [ -n "$SID" ]; then
-    SESSION_FILE="$HOME/.claude-buddy/sessions/${SID}.json"
-    if [ -f "$SESSION_FILE" ]; then
-      SESSION_REACTION=$(jq -r '.reaction // ""' "$SESSION_FILE" 2>/dev/null)
-      [ -n "$SESSION_REACTION" ] && REACTION="$SESSION_REACTION"
-    fi
-  fi
+  [ -n "$SID" ] && SESSION_REACTION=$(jq -r '.reaction // ""' "$HOME/.claude-buddy/sessions/${SID}.json" 2>/dev/null)
+  REACTION="$SESSION_REACTION"
+else
+  RAT=$(jq -r '(.reactionAt // 0) / 1000 | floor' "$STATE" 2>/dev/null)
+  [ $(( SB_NOW - ${RAT:-0} )) -gt 600 ] && REACTION=""
 fi
 
 # ─── Species art: 3 frames, 4 lines each ─────────────────────────────────────

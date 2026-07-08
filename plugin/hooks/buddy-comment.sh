@@ -19,6 +19,23 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // ""' 2>/dev/null)
 SESSIONS_DIR="$STATE_DIR/sessions"
 TTYS_DIR="$STATE_DIR/tty-sessions"
 
+# Hooks run detached from the terminal (own tty = "??"), so climb the process
+# tree to the nearest ancestor with a real controlling TTY — the Claude Code
+# process running in this terminal tab. Same walk the status line uses for width.
+find_tty() {
+  local pid=$$ tty
+  for _ in 1 2 3 4 5 6 7 8; do
+    tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ -n "$tty" ] && [ "$tty" != "??" ] && [ "$tty" != "-" ]; then
+      printf '%s' "$tty"
+      return 0
+    fi
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ -z "$pid" ] || [ "$pid" -le 1 ] 2>/dev/null; then break; fi
+  done
+  return 1
+}
+
 # Extract the assistant's last message
 RESPONSE=$(echo "$INPUT" | jq -r '.last_assistant_message // .stop_response // ""' 2>/dev/null)
 [ -z "$RESPONSE" ] && exit 0
@@ -34,8 +51,8 @@ if [ -n "$SESSION_ID" ]; then
   jq -n --arg sid "$SESSION_ID" --arg r "$COMMENT" --arg t "$(date +%s)000" \
     '{"session_id":$sid,"reaction":$r,"reactionAt":($t|tonumber)}' \
     > "$SESSIONS_DIR/${SESSION_ID}.tmp" && mv "$SESSIONS_DIR/${SESSION_ID}.tmp" "$SESSIONS_DIR/${SESSION_ID}.json"
-  MY_TTY=$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
-  if [ -n "$MY_TTY" ] && [ "$MY_TTY" != "??" ] && [ "$MY_TTY" != "-" ]; then
+  MY_TTY=$(find_tty)
+  if [ -n "$MY_TTY" ]; then
     mkdir -p "$TTYS_DIR"
     echo "$SESSION_ID" > "$TTYS_DIR/$MY_TTY"
   fi

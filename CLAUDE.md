@@ -55,6 +55,6 @@ Four integration points, all from a single plugin:
 ## Key Patterns
 
 - **Atomic writes**: state.ts uses write-to-temp + `rename()` to prevent race conditions between the MCP server, hooks, and status line script
-- **TTY-scoped sessions**: hooks read their controlling TTY via `ps -o tty= -p $$` and write `tty-sessions/{tty}` → session_id; the status line resolves this after its terminal-width walk (both share the same controlling TTY inherited from the Claude Code process)
+- **TTY-scoped sessions**: hooks run detached from the terminal (own tty is `??`), so they climb the process tree (`ps -o ppid=`/`-o tty=`, up to 8 levels) to the Claude Code process's controlling TTY and write `tty-sessions/{tty}` → session_id; the status line resolves the same TTY via its terminal-width walk. With a known TTY the status line shows only that terminal's session reaction (never the global `status.json` one, which is last-writer-wins across sessions); the global reaction is a fallback only when no TTY is resolvable and only while < 10 min old. Stale `tty-sessions` entries (> 7 days) are pruned on session start.
 - **macOS compatibility**: shell scripts use `sed` not `grep -P`, `tput cols` not `/proc/`
 - **No runtime deps**: esbuild bundles everything into one `.mjs` file; the installed version needs only `node` and `jq`
