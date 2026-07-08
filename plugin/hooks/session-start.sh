@@ -26,8 +26,8 @@ find_tty() {
   local pid=$$ tty
   for _ in 1 2 3 4 5 6 7 8; do
     tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
-    if [ -n "$tty" ] && [ "$tty" != "??" ] && [ "$tty" != "-" ]; then
-      printf '%s' "$tty"
+    if [ -n "$tty" ] && [ "$tty" != "??" ] && [ "$tty" != "?" ] && [ "$tty" != "-" ]; then
+      printf '%s' "${tty//\//_}"  # slashes (Linux pts/0) -> _ for a flat mapping filename
       return 0
     fi
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')

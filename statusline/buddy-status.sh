@@ -126,9 +126,10 @@ done
 # reaction — never another session's via the global file. Without a TTY, fall
 # back to the global reaction only while fresh (< 10 min), so a resolution
 # failure degrades to a quiet buddy instead of someone else's words.
-if [ -n "$TTY" ] && [ "$TTY" != "??" ] && [ "$TTY" != "-" ]; then
+if [ -n "$TTY" ] && [ "$TTY" != "??" ] && [ "$TTY" != "?" ] && [ "$TTY" != "-" ]; then
   SESSION_REACTION=""
-  SID=$(cat "$HOME/.claude-buddy/tty-sessions/$TTY" 2>/dev/null)
+  # mapping key matches the hooks': slashes (Linux pts/0) -> _
+  SID=$(cat "$HOME/.claude-buddy/tty-sessions/${TTY//\//_}" 2>/dev/null)
   [ -n "$SID" ] && SESSION_REACTION=$(jq -r '.reaction // ""' "$HOME/.claude-buddy/sessions/${SID}.json" 2>/dev/null)
   REACTION="$SESSION_REACTION"
 else
