@@ -80,6 +80,7 @@ fi
 if [ -d "$BUDDY_DIR" ]; then
   info "Removing $BUDDY_DIR..."
   rm -rf "$BUDDY_DIR"
+  rm -f "${TMPDIR:-/tmp}"/claude-buddy-git-* "${TMPDIR:-/tmp}"/claude-buddy-tty-* 2>/dev/null
   ok "Files removed"
 fi
 

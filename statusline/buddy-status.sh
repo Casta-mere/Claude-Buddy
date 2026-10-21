@@ -64,26 +64,39 @@ SB_CFGDIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$SB_CFGDIR/.claude.json" 2>/dev/null)
 [ -z "$SB_EMAIL" ] && SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null)
 SB_BRANCH=""; SB_DIRTY=""; SB_AHEAD=0; SB_BEHIND=0
-if [ -n "$SB_CWD" ]; then
-    SB_BRANCH=$(git -C "$SB_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null)
-    if [ -n "$SB_BRANCH" ]; then
-        # "*" when tracked files are modified/staged (untracked files don't count)
-        [ -n "$(git -C "$SB_CWD" status --porcelain --untracked-files=no 2>/dev/null)" ] && SB_DIRTY="*"
-        # ahead/behind upstream: rev-list --left-right --count prints "behind<TAB>ahead"
-        ab=$(git -C "$SB_CWD" rev-list --left-right --count '@{u}...HEAD' 2>/dev/null)
-        if [ -n "$ab" ]; then
-            SB_BEHIND=$(printf '%s' "$ab" | awk '{print $1+0}')
-            SB_AHEAD=$(printf '%s' "$ab" | awk '{print $2+0}')
-        fi
-    fi
-fi
-
 SB_NOW=$(date +%s)
+# Git info is cached per cwd for 30 s. Each refresh used to spawn 3 git
+# processes every 2 s per session; with several sessions open that was a
+# visible exec storm (2026-10-20 Mac freeze investigation).
+if [ -n "$SB_CWD" ]; then
+    SB_GITCACHE="${TMPDIR:-/tmp}/claude-buddy-git-${SB_CWD//\//_}"
+    SB_GITAGE=999
+    if [ -f "$SB_GITCACHE" ]; then
+        SB_GITAGE=$(( SB_NOW - $(stat -f %m "$SB_GITCACHE" 2>/dev/null || echo 0) ))
+    fi
+    if [ "$SB_GITAGE" -ge 0 ] && [ "$SB_GITAGE" -lt 30 ]; then
+        IFS=$'\x1f' read -r SB_BRANCH SB_DIRTY SB_BEHIND SB_AHEAD < "$SB_GITCACHE"
+    else
+        SB_BRANCH=$(git -C "$SB_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        if [ -n "$SB_BRANCH" ]; then
+            # "*" when tracked files are modified/staged (untracked files don't count)
+            [ -n "$(git -C "$SB_CWD" status --porcelain --untracked-files=no 2>/dev/null)" ] && SB_DIRTY="*"
+            # ahead/behind upstream: rev-list --left-right --count prints "behind<TAB>ahead"
+            ab=$(git -C "$SB_CWD" rev-list --left-right --count '@{u}...HEAD' 2>/dev/null)
+            if [ -n "$ab" ]; then
+                SB_BEHIND=$(printf '%s' "$ab" | awk '{print $1+0}')
+                SB_AHEAD=$(printf '%s' "$ab" | awk '{print $2+0}')
+            fi
+        fi
+        printf '%s\x1f%s\x1f%s\x1f%s\n' "$SB_BRANCH" "$SB_DIRTY" "$SB_BEHIND" "$SB_AHEAD" > "$SB_GITCACHE" 2>/dev/null
+    fi
+    SB_BEHIND=${SB_BEHIND:-0}; SB_AHEAD=${SB_AHEAD:-0}
+fi
 
 # ─── Animation ───────────────────────────────────────────────────────────────
 SEQ=(0 0 0 0 1 0 0 0 -1 0 0 2 0 0 0)
 SEQ_LEN=${#SEQ[@]}
-NOW=$(date +%s)
+NOW=$SB_NOW
 FRAME=${SEQ[$(( NOW % SEQ_LEN ))]}
 
 BLINK=0
@@ -106,18 +119,33 @@ esac
 B=$'\xe2\xa0\x80'  # Braille Blank U+2800 — survives .trim()
 
 # ─── Terminal width (walk process tree to find real TTY on macOS) ─────────────
-COLS=0
-PID=$$
-for _ in 1 2 3 4 5; do
-    PID=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d ' ')
-    [ -z "$PID" ] || [ "$PID" = "1" ] && break
-    TTY=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d ' ')
-    if [ -n "$TTY" ] && [ "$TTY" != "??" ] && [ "$TTY" != "-" ]; then
-        COLS=$(stty size < "/dev/$TTY" 2>/dev/null | awk '{print $2}')
-        [ "${COLS:-0}" -gt 40 ] 2>/dev/null && break
-        COLS=0
-    fi
-done
+COLS=0; TTY=""
+# The TTY is resolved once per Claude process and cached for 5 min. Walking
+# the process tree cost up to 10 ps spawns on every refresh.
+SB_CLAUDEPID=$(ps -o ppid= -p "$PPID" 2>/dev/null | tr -d ' ')
+SB_TTYCACHE="${TMPDIR:-/tmp}/claude-buddy-tty-${SB_CLAUDEPID:-0}"
+if [ -n "$SB_CLAUDEPID" ] && [ -f "$SB_TTYCACHE" ] \
+   && [ $(( SB_NOW - $(stat -f %m "$SB_TTYCACHE" 2>/dev/null || echo 0) )) -lt 300 ]; then
+    read -r TTY < "$SB_TTYCACHE"
+    COLS=$(stty size < "/dev/$TTY" 2>/dev/null | awk '{print $2}')
+    [ "${COLS:-0}" -gt 40 ] 2>/dev/null || { COLS=0; TTY=""; }
+fi
+if [ -z "$TTY" ]; then
+    PID=$$
+    for _ in 1 2 3 4 5; do
+        PID=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d ' ')
+        [ -z "$PID" ] || [ "$PID" = "1" ] && break
+        TTY=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d ' ')
+        if [ -n "$TTY" ] && [ "$TTY" != "??" ] && [ "$TTY" != "-" ]; then
+            COLS=$(stty size < "/dev/$TTY" 2>/dev/null | awk '{print $2}')
+            if [ "${COLS:-0}" -gt 40 ] 2>/dev/null; then
+                [ -n "$SB_CLAUDEPID" ] && printf '%s\n' "$TTY" > "$SB_TTYCACHE" 2>/dev/null
+                break
+            fi
+            COLS=0
+        fi
+    done
+fi
 [ "${COLS:-0}" -lt 40 ] && COLS=$(tput cols 2>/dev/null || echo 0)
 [ "${COLS:-0}" -lt 40 ] && COLS=${COLUMNS:-0}
 [ "${COLS:-0}" -lt 40 ] && COLS=125

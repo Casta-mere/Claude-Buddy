@@ -263,7 +263,7 @@ SETTINGS=$(echo "$SETTINGS" | jq --arg cmd "$BUDDY_DIR/statusline/buddy-status.s
   .statusLine = {
     "type": "command",
     "command": $cmd,
-    "refreshInterval": 2
+    "refreshInterval": 5
   }
 ')
 
