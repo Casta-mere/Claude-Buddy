@@ -65,6 +65,11 @@ SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$SB_CFGDIR/.claude.json"
 [ -z "$SB_EMAIL" ] && SB_EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null)
 SB_BRANCH=""; SB_DIRTY=""; SB_AHEAD=0; SB_BEHIND=0
 SB_NOW=$(date +%s)
+# Never take .git/index.lock from the status line: git status normally locks and
+# rewrites the index, and a run killed mid-write (sleep/wake burst, hard freeze,
+# SIGKILL) strands a 0-byte index.lock in every open repo (2026-10-21 diagnosis).
+# With optional locks off, status is read-only and output is unchanged.
+export GIT_OPTIONAL_LOCKS=0
 # Git info is cached per cwd for 30 s. Each refresh used to spawn 3 git
 # processes every 2 s per session; with several sessions open that was a
 # visible exec storm (2026-10-20 Mac freeze investigation).
